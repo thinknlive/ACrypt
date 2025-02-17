@@ -80,6 +80,7 @@ namespace ACrypt
 
         class MakePi
         {
+            // Optimized Gosper Series PI from Gibbons paper.
             BigInteger Q, R, T, I;
             BigInteger U, Y;
             private int digitCount = 0;
