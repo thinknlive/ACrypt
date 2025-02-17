@@ -10,11 +10,18 @@ using System.Formats.Asn1;
 
 namespace ACrypt
 {
-    // This version takes a hash of given length of the provided key and/or pin and IV and
-    // encodes it with 100% foreknowledge as a prefix of the message
+    // An aritmetic coder (compressor) that encrypts by 
+    // taking a hash of given length of the provided key and/or pin and IV and
+    // encodes it with 100% foreknowledge as a prefix of the message (basically using zero space).
     // The remainder of the message is encoded with a symbol table using a simple prefix adaptive model
-    // It does the same on decode to remove the prefix and decode the remaining message
+    // It does the same on decode to remove the prefix and decode the remaining message successfully.
 
+    // Decrypt *must* use the same Key, Pin, IV, Step as Encrypt. All are optional.
+
+    // The current Step is empirically chosen to provide minimal compression with the
+    // advantage of the length of the encrypted message not being more than the unencrypted message.
+    // For text or other files with a degree of repetition use a larger step (try powers of two) for
+    // a much higher compression ration.
 
     public class ACoder2
     {
