@@ -78,47 +78,7 @@ namespace ACrypt
 
         readonly RandomLehmer prng;
 
-        class MakePi
-        {
-            // Optimized Gosper Series PI from Gibbons paper.
-            BigInteger Q, R, T, I;
-            BigInteger U, Y;
-            private int digitCount = 0;
-            public int Count { get { return digitCount; } }
-
-            public MakePi()
-            {
-                Q = 1; R = 180; T = 60; I = 2;
-                U = 0; Y = 0;
-                digitCount = 0;
-            }
-
-            public void Reset()
-            {
-                Q = 1; R = 180; T = 60; I = 2;
-                U = 0; Y = 0;
-                digitCount = 0;
-            }
-            public BigInteger Next()
-            {
-                U = (3 * (3 * I + 1) * (3 * I + 2));
-                Y = (Q * (27 * I - 12) + 5 * R) / (5 * T);
-
-                BigInteger YResult = Y;
-
-                BigInteger
-                    q = 10 * Q * I * (2 * I - 1),
-                    r = 10 * U * (Q * (5 * I - 2) + R - Y * T),
-                    t = T * U,
-                    i = I + 1;
-
-                Q = q; R = r; T = t; I = i; digitCount++;
-                return YResult;
-            }
-        }
-
-        //private readonly int[] piDigits;
-
+        
         class YABIT
         {
             // #define LSBIT(i) ((i) & -(i)) // Return the least-significant set bit in i
