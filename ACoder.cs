@@ -13,7 +13,8 @@ namespace ACrypt
     // An aritmetic coder (compressor) that encrypts by 
     // taking a hash of given length of the provided key and/or pin and IV and
     // encodes it with 100% foreknowledge as a prefix of the message (basically using zero space).
-    // The remainder of the message is encoded with a symbol table using a simple prefix adaptive model
+    
+    // The remainder of the message is encoded with a symbol table using a simple prefix adaptive model that is surprisingly effective
     // It does the same on decode to remove the prefix and decode the remaining message successfully.
 
     // Decrypt *must* use the same Key, Pin, IV, Step as Encrypt. All are optional.
