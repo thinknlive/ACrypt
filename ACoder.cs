@@ -48,11 +48,11 @@ namespace ACrypt
         YABIT CumeFreq;
 
         readonly byte[] encryptKey;
-        readonly long codingStep;
+        long codingStep;
         readonly long[] initFreq;
         readonly int randomVLen;
         readonly uint randomSeed;
-
+        readonly Dictionary<int,int> codingSymbols;
 
         class RandomLehmer
         {
@@ -78,7 +78,45 @@ namespace ACrypt
 
         readonly RandomLehmer prng;
 
-        
+        class FnvHash
+        {
+            private ulong _offset = 2166136261;
+            private ulong _prime = 1099511628211;
+            private ulong _mask = 0xFFFFFFFF;
+            private ulong _hash;
+
+            public FnvHash()
+            {
+                _hash = _offset;
+            }
+
+            public void Reset() { _hash = _offset; }
+
+            public ulong Finalize() {  ulong result = _hash; _hash = _offset; return result; }
+
+            public ulong Hash (ulong val) {
+                unchecked
+                {
+                    _hash ^= val;
+                    _hash *= _prime;
+                    _hash &= _mask;
+                }
+                return _hash;
+            }
+
+            public ulong ComputeHash(byte[] bites)
+            {
+                Reset();
+                for(int i=0; i<bites.Length; i++)
+                {
+                    Hash(bites[i]);
+                }
+                return Finalize();
+            }
+        }
+
+        //private readonly int[] piDigits;
+
         class YABIT
         {
             // #define LSBIT(i) ((i) & -(i)) // Return the least-significant set bit in i
@@ -313,8 +351,8 @@ namespace ACrypt
             readonly ACoder2 coder;
 
             long[] magicFreq;
-            
-            int prevYABIT;
+
+            int prevSymbol;
             YABIT[] yABITs;
             long[] ttlYABITs;
 
@@ -341,11 +379,11 @@ namespace ACrypt
                     long prefixSum = yABITs[i].PrefixSum(NumberOfSymbols);
                     if (prefixSum > MaxFrequency)
                     {
-                        throw new Exception($"ACoder2: Frequency out of range error {prefixSum} > {MaxFrequency}");
+                        throw new Exception($"ACoder2: Frequency (yabit) out of range error {prefixSum} > {MaxFrequency}");
                     }
                     ttlYABITs[i] = prefixSum;
                 }
-                prevYABIT = -1;
+                prevSymbol = -1;
 
                 coder.CumeFreq = new(initFreq);
             }
@@ -383,7 +421,7 @@ namespace ACrypt
                     long ttlFreq = ttlYABITs[yabit];
                     if (ttlFreq > MaxFrequency)
                     {
-                        long prevTtlFreq = ttlFreq;
+                        //long prevTtlFreq = ttlFreq;
                         yABIT.Scale((int)ScaleValue);
                         ttlFreq = yABIT.PrefixSum(NumberOfSymbols);
                         ttlYABITs[yabit] = ttlFreq;
@@ -391,28 +429,39 @@ namespace ACrypt
                     }
 
                     long freqStep = coder.codingStep;
-                    ttlYABITs[yabit] += freqStep;
                     yABIT.Add(symbol, freqStep);
-
+                    ttlYABITs[yabit] += freqStep;
                 }
 
-                if (prevYABIT >= 0)
+                if (prevSymbol >= 0)
                 {
-                    scaleYABIT(prevYABIT);
+                    scaleYABIT(prevSymbol);
                 }
                 else
                 {
                     scaleYABIT(symbol);
                 }
 
-                prevYABIT = symbol;
+                if (coder.codingSymbols.TryGetValue(symbol, out int value))
+                {
+                    value++;
+                    coder.codingSymbols[symbol] = value;
+                }
+                else
+                {
+                    coder.codingSymbols.Add(symbol, 1);
+                }
+
+                prevSymbol = symbol;
                 coder.CumeFreq = yABITs[symbol];
+
             }
 
         }
 
         public ACoder2(byte[] key, uint pin = 0, int rv = 0, uint step = 0)
         {
+            FnvHash hasher = new FnvHash();
 
             if (rv > 0)
             {
@@ -420,12 +469,12 @@ namespace ACrypt
                 randomSeed = pin;
                 if (randomVLen > 0 && randomSeed > 0)
                 {
-                    byte[] intBytes = BitConverter.GetBytes(randomSeed);
+                    hasher.Reset();
+                    byte[] bytes = BitConverter.GetBytes(randomSeed);
                     if (BitConverter.IsLittleEndian)
-                        Array.Reverse(intBytes);
-                    byte[] hashSeed = Blake2Fast.Blake2b.ComputeHash(4, intBytes);
-                    uint prngSeed = BitConverter.ToUInt32(hashSeed, 0);
-
+                        Array.Reverse(bytes);
+                    ulong hashSeed = hasher.ComputeHash(bytes);
+                    uint prngSeed = (uint)hashSeed;
                     prng = new RandomLehmer(prngSeed);
                 }
             }
@@ -433,7 +482,11 @@ namespace ACrypt
 
             if (key != null && key.Length > 0)
             {
-                encryptKey = Blake2Fast.Blake2b.ComputeHash(32, key);
+                hasher.Reset();
+                ulong encryptKeyHash = hasher.ComputeHash(key);
+                encryptKey = BitConverter.GetBytes(encryptKeyHash);
+                if (BitConverter.IsLittleEndian)
+                    Array.Reverse(encryptKey);
                 uint prngSeed = BitConverter.ToUInt32(encryptKey, 0);
                 if (randomVLen > 0 && prng == null)
                 {
@@ -454,7 +507,8 @@ namespace ACrypt
                     initFreq[i] = 1;
                 }
             }
-            codingStep = step > 0 ? step : 4; // NumberOfSymbols;
+            codingStep = step > 0 ? step : NumberOfChars;
+            codingSymbols = [];
         }
 
         public byte[] Encode(string input)
@@ -464,6 +518,8 @@ namespace ACrypt
 
         public byte[] Encode(byte[] input)
         {
+            codingSymbols.Clear();
+
             Model model = new(this);
             long low, high;
             long bitsToFollow;
@@ -585,13 +641,22 @@ namespace ACrypt
             }
             EncodeSymbol(EofSymbol);
             DoneEncoding();
-            //Console.Error.WriteLine("Encoding Done");
+
+            KeyValuePair<int, int>[] cs = codingSymbols.ToArray();
+            Array.Sort(cs, (a, b) => { return b.Value - a.Value; });
+            foreach (var item in cs)
+            {
+                Console.Error.Write($"[{item.Key},{item.Value}] ");
+            }
+            Console.Error.WriteLine($"[{codingSymbols.Count}]");
 
             return bitOutput.Done();
         }
 
         public byte[] Decode(byte[] input)
         {
+            codingSymbols.Clear();
+
             Model model = new(this);
             long value;
             long low, high;
@@ -731,6 +796,343 @@ namespace ACrypt
             return output.ToArray();
         }
 
+        public byte[] LZWEncode(byte[] input)
+        {
+            codingSymbols.Clear();
+
+            Model model = new(this);
+            long low, high;
+            long bitsToFollow;
+            BitOutput bitOutput;
+
+            void StartEncoding()
+            {
+                low = 0;
+                high = TopValue;
+                bitsToFollow = 0;
+            }
+
+            void EncodeSymbol(int symbol)
+            {
+                long range;
+                long ttlSym = CumeFreq.PrefixSum(NumberOfSymbols);
+                long ttlSymHi = CumeFreq.PrefixSum(symbol + 1);
+                long ttlSymLo = CumeFreq.PrefixSum(symbol);
+
+                range = (high - low) + 1;
+                high = low + (range * ttlSymHi) / ttlSym - 1;
+                low = low + (range * ttlSymLo) / ttlSym;
+                for (; ; )
+                {
+                    if (high < Half)
+                    {
+                        bitPlusFollow(0);
+                    }
+                    else if (low >= Half)
+                    {
+                        bitPlusFollow(1);
+                        low -= Half;
+                        high -= Half;
+                    }
+                    else if (low >= FirstQtr && high < ThirdQtr)
+                    {
+                        bitsToFollow += 1;
+                        low -= FirstQtr;
+                        high -= FirstQtr;
+                    }
+                    else
+                    {
+                        break;
+                    }
+                    low <<= 1; //2 * low;
+                    high = (high << 1) + 1; // 2 * high + 1;
+                }
+            }
+
+            void DoneEncoding()
+            {
+                bitsToFollow += 1;
+                if (low < FirstQtr)
+                {
+                    bitPlusFollow(0);
+                }
+                else
+                {
+                    bitPlusFollow(1);
+                }
+            }
+
+            void bitPlusFollow(int bit)
+            {
+                bitOutput.OutputBit(bit);
+                while (bitsToFollow > 0)
+                {
+                    bitOutput.OutputBit(bit == 1 ? 0 : 1);
+                    bitsToFollow -= 1;
+                }
+            }
+
+
+            LZWCoder lzwCoder = new();
+            List<int> lzwInput = lzwCoder.Encode(input);
+
+            bitOutput = new(input.Length);
+            StartEncoding();
+
+            if (randomVLen > 0 && prng != null)
+            {
+                //Console.Error.WriteLine("Encoding IV...");
+                prng.Reset();
+                var rv = new byte[randomVLen];
+                for (int i = 0; i < rv.Length; i += 1)
+                {
+                    rv[i] = (byte)(prng.Next() % 255);
+                }
+                int prevKeySymbol = -1;
+                for (int i = 0; i < rv.Length; i += 1)
+                {
+                    var keySymbol = rv[i];
+                    model.SetSymbolMagic(keySymbol, prevKeySymbol);
+                    EncodeSymbol(keySymbol);
+                    prevKeySymbol = keySymbol;
+                }
+                model.ResetModelSymbols();
+            }
+
+            if (encryptKey != null)
+            {
+                //Console.Error.WriteLine("Encoding Key...");
+                var keyHash = encryptKey;
+                int prevKeySymbol = -1;
+                for (int i = 0; i < keyHash.Length; i += 1)
+                {
+                    var keySymbol = keyHash[i];
+                    model.SetSymbolMagic(keySymbol, prevKeySymbol);
+                    EncodeSymbol(keySymbol);
+                    prevKeySymbol = keySymbol;
+                }
+                model.ResetModelSymbols();
+            }
+
+            //Console.Error.WriteLine("Encoding Data...");
+            //for (int i = 0; i < lzwInput.Count; i += 1)
+            //{
+            //    int val = lzwInput[i];
+            //    val = val & 0xFFFF;
+            //    byte byteLo = (byte)(val & 0xFF);
+            //    byte byteHi = (byte)(val >> 8);
+            //    EncodeSymbol(byteLo);
+            //    model.Update(byteLo);
+            //    EncodeSymbol(byteHi);
+            //    model.Update(byteHi);
+            //}
+            for (int i = 0; i < lzwInput.Count; i += 1)
+            {
+                int val = lzwInput[i];
+                val = val & 0xFFFF;
+                byte byteHi = (byte)(val >> 8);
+                EncodeSymbol(byteHi);
+                model.Update(byteHi);
+            }
+            for (int i = 0; i < lzwInput.Count; i += 1)
+            {
+                int val = lzwInput[i];
+                val = val & 0xFFFF;
+                byte byteLo = (byte)(val & 0xFF);
+                EncodeSymbol(byteLo);
+                model.Update(byteLo);
+            }
+
+            EncodeSymbol(EofSymbol);
+            DoneEncoding();
+
+            KeyValuePair<int, int>[] cs = codingSymbols.ToArray();
+            Array.Sort(cs, (a, b) => { return b.Value - a.Value; });
+            foreach (var item in cs)
+            {
+                Console.Error.Write($"[{item.Key},{item.Value}] ");
+            }
+            Console.Error.WriteLine($"[{codingSymbols.Count}]");
+
+            return bitOutput.Done();
+        }
+
+        public byte[] LZWDecode(byte[] input)
+        {
+            codingSymbols.Clear();
+
+            Model model = new(this);
+            long value;
+            long low, high;
+            BitInput bitInput;
+            MemoryStream output = new MemoryStream(8192);
+
+            void StartDecoding()
+            {
+                value = 0;
+                for (int i = 0; i < CodeValueBits; i += 1)
+                {
+                    value = (value << 1) + bitInput.InputBit();
+                }
+                low = 0;
+                high = TopValue;
+            }
+
+            int DecodeSymbol()
+            {
+
+                long ttlSym = CumeFreq.PrefixSum(NumberOfSymbols);
+                long range = (high - low) + 1;
+                long cum = (((value - low) + 1) * ttlSym - 1) / range;
+                long ttlSymHi, ttlSymLo;
+                int symbol;
+
+                symbol = CumeFreq.RankQuery(cum);
+                ttlSymHi = CumeFreq.PrefixSum(symbol + 1);
+                ttlSymLo = CumeFreq.PrefixSum(symbol);
+
+                high = low + (range * ttlSymHi) / ttlSym - 1;
+                low = low + (range * ttlSymLo) / ttlSym;
+                for (; ; )
+                {
+                    if (high < Half)
+                    {
+                        /* nothing */
+                    }
+                    else if (low >= Half)
+                    {
+                        value -= Half;
+                        low -= Half;
+                        high -= Half;
+                    }
+                    else if (low >= FirstQtr && high < ThirdQtr)
+                    {
+                        value -= FirstQtr;
+                        low -= FirstQtr;
+                        high -= FirstQtr;
+                    }
+                    else
+                    {
+                        break;
+                    }
+                    low <<= 1;
+                    high = (high << 1) + 1;
+                    value = (value << 1) + bitInput.InputBit();
+                }
+                return symbol;
+            }
+
+            bitInput = new(this, input);
+            StartDecoding();
+
+            try
+            {
+                if (randomVLen > 0 && prng != null)
+                {
+                    //Console.Error.WriteLine("Decoding IV...");
+                    prng.Reset();
+                    var rv = new byte[randomVLen];
+                    for (int i = 0; i < rv.Length; i += 1)
+                    {
+                        rv[i] = (byte)(prng.Next() % 255);
+                    }
+                    int prevKeySymbol = -1;
+                    for (int i = 0; i < rv.Length; i += 1)
+                    {
+                        int keySymbol = rv[i];
+                        model.SetSymbolMagic(keySymbol, prevKeySymbol);
+                        int symbol = DecodeSymbol();
+                        if (symbol == EofSymbol)
+                        {
+                            return [];
+                        }
+                        if (symbol != keySymbol)
+                        {
+                            return [];
+                        }
+                        prevKeySymbol = keySymbol;
+                    }
+                    model.ResetModelSymbols();
+                }
+
+                if (encryptKey != null)
+                {
+                    //Console.Error.WriteLine("Decoding Key...");
+                    var keyHash = encryptKey;
+                    int prevKeySymbol = -1;
+                    for (int i = 0; i < keyHash.Length; i += 1)
+                    {
+                        int keySymbol = keyHash[i];
+                        model.SetSymbolMagic(keySymbol, prevKeySymbol);
+                        int symbol = DecodeSymbol();
+                        if (symbol == EofSymbol)
+                        {
+                            return [];
+                        }
+                        if (symbol != keySymbol)
+                        {
+                            return [];
+                        }
+                        prevKeySymbol = keySymbol;
+                    }
+                    model.ResetModelSymbols();
+                }
+
+                //Console.Error.WriteLine("Decoding Data...");
+                for (; ; )
+                {
+                    int symbol = DecodeSymbol();
+                    if (symbol == EofSymbol)
+                    {
+                        break;
+                    }
+                    output.WriteByte((byte)symbol);
+                    model.Update(symbol);
+                }
+                //Console.Error.WriteLine("Decoding Done");
+
+                var acOutput = output.ToArray();
+                List<int> lzwInput = [];
+                //int ndx = 0;
+                //while (ndx < acOutput.Length)
+                //{
+                //    byte byteLo = acOutput[ndx++];
+                //    byte byteHi = acOutput[ndx++];
+                //    int val = 0;
+                //    val = (byteHi << 8) | byteLo;
+                //    lzwInput.Add(val);
+                //}
+                int ndx = 0;
+                int ndxHalf = acOutput.Length >> 1;
+                while (ndx < ndxHalf)
+                {
+                    byte byteHi = acOutput[ndx];
+                    int val = (byteHi << 8);
+                    lzwInput.Add(val);
+                    ndx++;
+                }
+                while (ndx < acOutput.Length)
+                {
+                    byte byteLo = acOutput[ndx];
+                    int val = lzwInput[ndx - ndxHalf];
+                    val |= byteLo;
+                    lzwInput[ndx - ndxHalf] = val;
+                    ndx++;
+                }
+
+
+                LZWCoder lzwCoder = new();
+                var lzwOutput = lzwCoder.Decode(lzwInput).ToArray();
+                
+                return lzwOutput;
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine(ex);
+                return [];
+            }
+
+        }
 
     }
 
