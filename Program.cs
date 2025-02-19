@@ -113,6 +113,45 @@ namespace ACrypt
                 try
                 {
                     byte[] data = File.ReadAllBytes(fileIn);
+
+                    {
+                        // Testing out the LZW Coder
+                        LZWCoder lzw = new();
+                        Stopwatch lzwTimer = Stopwatch.StartNew();
+                        List<int> encoded = lzw.Encode(data);
+                        long msecsEnc = lzwTimer.ElapsedMilliseconds;
+
+                        lzwTimer.Restart();
+                        List<byte> decoded = lzw.Decode(encoded);
+                        long msecsDec = lzwTimer.ElapsedMilliseconds;
+
+                        var preHash = SHA256.Create().ComputeHash(data);
+                        var postHash = SHA256.Create().ComputeHash([.. decoded]);
+                        double lzwPct = Math.Round(((double)encoded.Count / data.Length) * 100.0, 3);
+
+                        Console.Error.WriteLine(
+                            $"LZW: ENCode [{data.Length}], [{msecsEnc}] msecs; " +
+                            $" Encoded Length [{encoded.Count}]; " +
+                            $"DECode [{decoded.Count}], [{msecsDec}] msecs; Pct [{lzwPct}]\n" +
+                            $"[{Convert.ToHexString(preHash)}] ?= [{Convert.ToHexString(postHash)}]");
+                        
+                        lzwTimer.Restart();
+                        byte[] acLzwEncoded = protector.LZWEncode(data);
+                        msecsEnc = lzwTimer.ElapsedMilliseconds;
+
+                        lzwTimer.Restart();
+                        byte[] acLzwDecoded = protector.LZWDecode(acLzwEncoded);
+                        msecsDec = lzwTimer.ElapsedMilliseconds;
+
+                        preHash = SHA256.Create().ComputeHash(data);
+                        postHash = SHA256.Create().ComputeHash(acLzwDecoded);
+                        lzwPct = Math.Round(((double)acLzwEncoded.Length / data.Length) * 100.0, 3);
+                        Console.Error.WriteLine(
+                            $"ACLZW: ENCode [{data.Length}], [{msecsEnc}] msecs; " +
+                            $" Encoded Length [{acLzwEncoded.Length}]; " +
+                            $"DECode [{acLzwDecoded.Length}], [{msecsDec}] msecs; Pct [{lzwPct}]\n" +
+                            $"[{Convert.ToHexString(preHash)}] ?= [{Convert.ToHexString(postHash)}]");
+                    }
                     
                     Stopwatch sw = Stopwatch.StartNew();
                     byte[] secretBin = protector.Encode(data);
